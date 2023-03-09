@@ -1,0 +1,608 @@
+```{r}
+library(Seurat)
+library(tidyverse)
+library(biomaRt)
+library(DoubletFinder)
+library(dittoSeq)
+library(EnhancedVolcano)
+library(SCPA)
+library(ggpubr)
+library(screpertoire)
+```
+
+Create Seurat objects
+```{r}
+WT1_seurat <- Read10X(data.dir = "~/TATO_final_sc/additional_analyses/10X-gex-grouped/TY01/TY01/outs/filtered_feature_bc_matrix/")
+WT2_seurat <- Read10X(data.dir = "~/TATO_final_sc/additional_analyses/10X-gex-grouped/TY04/TY04/outs/filtered_feature_bc_matrix/")
+WT3_seurat <- Read10X(data.dir = "~/TATO_final_sc/additional_analyses/10X-gex-grouped/TY07/TY07/outs/filtered_feature_bc_matrix/")
+
+KO1_seurat <- Read10X(data.dir = "~/TATO_final_sc/additional_analyses/10X-gex-grouped/TY03/TY03/outs/filtered_feature_bc_matrix/")
+KO2_seurat <- Read10X(data.dir = "~/TATO_final_sc/additional_analyses/10X-gex-grouped/TY06/TY06/outs/filtered_feature_bc_matrix/")
+KO3_seurat <- Read10X(data.dir = "~/TATO_final_sc/additional_analyses/10X-gex-grouped/TY09/TY09/outs/filtered_feature_bc_matrix/")
+
+WT1_seurat <- CreateSeuratObject(counts = WT1_seurat, project = "TATO", min.cells=3, min.features = 200)
+WT2_seurat <- CreateSeuratObject(counts = WT2_seurat, project = "TATO", min.cells=3, min.features = 200)
+WT3_seurat <- CreateSeuratObject(counts = WT3_seurat, project = "TATO", min.cells=3, min.features = 200)
+
+KO1_seurat <- CreateSeuratObject(counts = KO1_seurat, project = "TATO", min.cells=3, min.features = 200)
+KO2_seurat <- CreateSeuratObject(counts = KO2_seurat, project = "TATO", min.cells=3, min.features = 200)
+KO3_seurat <- CreateSeuratObject(counts = KO3_seurat, project = "TATO", min.cells=3, min.features = 200)
+```
+
+Merge files
+```{r}
+WT_all <- merge(WT1_seurat, y = c(WT2_seurat, WT3_seurat), add.cell.ids = c("WT1", "WT2", "WT3"), project = "WT_Tato")
+KO_all <- merge(KO1_seurat, y = c(KO2_seurat, KO3_seurat), add.cell.ids = c("KO1", "KO2", "KO3"), project = "KO_Tato")
+```
+
+Add mitochondrial and ribosomal gene %
+```{r}
+WT_all[["percent.mito"]] <- PercentageFeatureSet(WT_all, pattern = "^mt-")
+KO_all[["percent.mito"]] <- PercentageFeatureSet(KO_all, pattern = "^mt-")
+
+WT_all[["percent.ribo"]] <- PercentageFeatureSet(WT_all, pattern = "^Rps-")
+KO_all[["percent.ribo"]] <- PercentageFeatureSet(KO_all, pattern = "^Rps-")
+```
+
+Add metadata
+```{r}
+#Extract metadata
+WT_metadata <- WT_all@meta.data
+KO_metadata <- KO_all@meta.data
+
+#make a new column with cell ids (currently on rownames)
+WT_metadata$cells <- rownames(WT_metadata)
+KO_metadata$cells <- rownames(KO_metadata)
+
+#Extract sample ID and add as column to metadata - first 3 characters of cell name, has sample ID appended
+WT_metadata$sample<-substr(WT_metadata$cells, 1, 3)
+KO_metadata$sample<-substr(KO_metadata$cells, 1, 3)
+
+#Rename some columns to make more sense
+# WT_metadata <- WT_metadata %>%
+#         dplyr::rename(seq_folder = orig.ident,
+#                       nUMI = nCount_RNA,
+#                       nGene = nFeature_RNA)
+# 
+# KO_metadata <- KO_metadata %>%
+#         dplyr::rename(seq_folder = orig.ident,
+#                       nUMI = nCount_RNA,
+#                       nGene = nFeature_RNA)
+
+#Put metadata back
+WT_all@meta.data <- WT_metadata
+KO_all@meta.data <- KO_metadata 
+
+```
+
+QC visualisation
+```{r}
+WT_metadata %>% 
+  	ggplot(aes(x=sample, fill=sample)) + 
+  	geom_bar() +
+  	theme_classic() +
+  	theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1)) +
+  	theme(plot.title = element_text(hjust=0.5, face="bold")) +
+  	ggtitle("NCells")
+    ggsave("NCells WT.pdf", device="pdf")
+```
+
+```{r}
+KO_metadata %>% 
+  	ggplot(aes(x=sample, fill=sample)) + 
+  	geom_bar() +
+  	theme_classic() +
+  	theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1)) +
+  	theme(plot.title = element_text(hjust=0.5, face="bold")) +
+  	ggtitle("NCells")
+    ggsave("NCells KO.pdf", device="pdf")
+```
+
+```{r}
+WT_metadata %>% 
+  	ggplot(aes(color=sample, x=nCount_RNA, fill= sample)) + 
+  	geom_density(alpha = 0.2) + 
+  	scale_x_log10() + 
+  	theme_classic() +
+  	ylab("Cell density") +
+  	geom_vline(xintercept = 500)
+ggsave("UMI per cell WT.pdf", device = "pdf")
+```
+
+```{r}
+KO_metadata %>% 
+  	ggplot(aes(color=sample, x=nCount_RNA, fill= sample)) + 
+  	geom_density(alpha = 0.2) + 
+  	scale_x_log10() + 
+  	theme_classic() +
+  	ylab("Cell density") +
+  	geom_vline(xintercept = 500)
+ggsave("UMI per cell KO.pdf", device = "pdf")
+```
+
+```{r}
+WT_metadata %>% 
+  	ggplot(aes(x=sample, y=log10(nGene), fill=sample)) + 
+  	geom_boxplot() + 
+  	theme_classic() +
+  	theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1)) +
+  	theme(plot.title = element_text(hjust=0.5, face="bold")) +
+  	ggtitle("NCells vs NGenes WT")
+ggsave("NCells vs NGenes WT.pdf", device = "pdf")
+```
+
+```{r}
+KO_metadata %>% 
+  	ggplot(aes(x=sample, y=log10(nGene), fill=sample)) + 
+  	geom_boxplot() + 
+  	theme_classic() +
+  	theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1)) +
+  	theme(plot.title = element_text(hjust=0.5, face="bold")) +
+  	ggtitle("NCells vs NGenes KO")
+ggsave("NCells vs NGenes KO.pdf", device = "pdf")
+```
+
+Visualize the correlation between genes detected and number of UMIs and determine whether strong presence of cells with low numbers of genes/UMIs
+```{r}
+WT_metadata %>% 
+  	ggplot(aes(x=nUMI, y=nGene, color=percent.mito)) + 
+  	geom_point() + 
+	scale_colour_gradient(low = "gray90", high = "black") +
+  	stat_smooth(method=lm) +
+  	scale_x_log10() + 
+  	scale_y_log10() + 
+  	theme_classic() +
+  	geom_vline(xintercept = 500) +
+  	geom_hline(yintercept = 250) +
+  	facet_wrap(~sample)
+ggsave("WT nGenes vs nUMI.pdf", device = "pdf")
+```
+
+```{r}
+KO_metadata %>% 
+  	ggplot(aes(x=nUMI, y=nGene, color=percent.mito)) + 
+  	geom_point() + 
+	scale_colour_gradient(low = "gray90", high = "black") +
+  	stat_smooth(method=lm) +
+  	scale_x_log10() + 
+  	scale_y_log10() + 
+  	theme_classic() +
+  	geom_vline(xintercept = 500) +
+  	geom_hline(yintercept = 250) +
+  	facet_wrap(~sample)
+ggsave("KO nGenes vs nUMI.pdf", device = "pdf")
+```
+
+Set QC parameters
+```{r}
+WT_all <- subset(WT_all, subset = nFeature_RNA > 200 & nFeature_RNA < 2500 & percent.mito < 5 & nCount_RNA >2000)
+KO_all <- subset(KO_all, subset = nFeature_RNA > 200 & nFeature_RNA < 2500 & percent.mito < 5 & nCount_RNA >2000)
+```
+
+Cell cycle scoring
+```{r}
+s.genes <- cc.genes.updated.2019$s.genes
+g2m.genes <- cc.genes.updated.2019$g2m.genes
+
+# Basic function to convert human to mouse gene names
+
+convertMouseGeneList <- function(x){
+
+human = useMart("ensembl", dataset = "hsapiens_gene_ensembl")
+mouse = useMart("ensembl", dataset = "mmusculus_gene_ensembl")
+
+genesV2 = getLDS(attributes = c("hgnc_symbol"), filters = "hgnc_symbol", values = x , mart = human, attributesL = c("mgi_symbol"), martL = mouse, uniqueRows=T)
+
+humanx <- unique(genesV2[, 2])
+
+# Print the first 6 genes found to the screen
+print(head(humanx))
+return(humanx)
+}
+
+s.genes <- convertMouseGeneList(s.genes)
+g2m.genes <- convertMouseGeneList(g2m.genes)
+
+WT_phase <-CellCycleScoring(WT_phase, s.features = s.genes, g2m.features = g2m.genes)
+WT_phase <- RunPCA(WT_phase)
+WT_CC_PCA <- DimPlot(WT_phase,
+        reduction = "pca",
+        group.by= "Phase",
+        )
+save_plot("WT_CC_pre_PCA.pdf", WT_CC_PCA)
+
+KO_phase <-CellCycleScoring(KO_phase, s.features = s.genes, g2m.features = g2m.genes)
+KO_phase <- RunPCA(KO_phase)
+KO_CC_PCA <- DimPlot(KO_phase,
+        reduction = "pca",
+        group.by= "Phase",
+        )
+
+save_plot("KO_CC_pre_PCA.pdf", KO_CC_PCA)
+
+WT_all$state <- "WT"
+KO_all$state <- "KO"
+```
+
+SCTransform and regress out mito, ribo, and cell cycle covariates
+```{r}
+WT_phase <- SCTransform(WT_phase, vars.to.regress = c("percent.mito", "S.Score", "G2M.Score", "percent.ribo"), verbose = TRUE)
+KO_phase <- SCTransform(KO_phase, vars.to.regress = c("percent.mito", "S.Score", "G2M.Score", "percent.ribo"), verbose = TRUE)
+
+WT_phase$state <- "WT"
+KO_phase$state <- "KO"
+```
+
+Run clustering and clean up before integrating
+```{r}
+WT.combined <- ScaleData(WT_phase)
+WT.combined <- FindVariableFeatures((WT.combined))
+WT.combined <- RunPCA(WT.combined)
+
+# t-SNE and Clustering
+WT.combined <- RunUMAP(WT.combined, reduction = "pca", dims = 1:30)
+WT.combined <- FindNeighbors(WT.combined, reduction = "pca", dims = 1:30)
+WT.combined <- FindClusters(WT.combined, resolution = 1)
+
+DimPlot(WT.combined, reduction = "umap",split.by = "sample", cols = dittoColors(), label = T) 
+```
+
+Remove contaminant cluster from WT_3 before integrating with KO
+```{r}
+WT.combined<- subset(WT.combined, idents = c(5,16,4, 14, 15), invert = TRUE)
+```
+
+Integrate
+```{r}
+immune.anchors <- FindIntegrationAnchors(object.list = list(WT.combined, KO.combined), dims = 1:20)
+tato.combined <- IntegrateData(anchorset = immune.anchors, dims = 1:20, normalization.method = "SCT")
+```
+
+Basic clustering
+```{r}
+DefaultAssay(tato.combined) <- "integrated"
+#tato.combined <- FindVariableFeatures(tato.combined)
+tato.combined <- ScaleData(tato.combined)
+tato.combined <- FindVariableFeatures((tato.combined))
+tato.combined <- RunPCA(tato.combined)
+
+# t-SNE and Clustering
+tato.combined <- RunUMAP(tato.combined, reduction = "pca", dims = 1:30)
+tato.combined <- FindNeighbors(tato.combined, reduction = "pca", dims = 1:30)
+tato.combined <- FindClusters(tato.combined, resolution = .35)
+```
+
+Doublet removal 
+```{r}
+sweep.res.list_TATO <- paramSweep_v3(tato.combined, PCs = 1:10, sct = TRUE)
+sweep.stats_TATO <- summarizeSweep(sweep.res.list_TATO, GT = FALSE)
+bcmvn_TATO <- find.pK(sweep.stats_TATO)
+nExp_poi <- round(0.075*nrow(tato.combined@meta.data))
+
+tato.combined.doublet <- doubletFinder_v3(tato.combined, PCs = 1:10, pN = 0.25, pK = 0.09, nExp = nExp_poi, reuse.pANN = FALSE, sct = TRUE)
+
+tato.combined <- subset(tato.combined.doublet, subset = DF.classifications_0.25_0.09_808 == "Singlet")
+```
+
+Remove outliers based on UMAP co-ordinates
+```{r}
+# Get the UMAP embeddings into a dataframe
+umapCoord <- as.data.frame(Embeddings(object = tato.combined[["umap"]]))
+
+#Extract metadata
+tato_metadata <- tato.combined@meta.data
+
+#make a new column with cell ids (currently on rownames)
+tato_metadata$umap1 <- umapCoord$UMAP_1
+tato_metadata$umap2 <- umapCoord$UMAP_2
+
+tato.combined@meta.data <- tato_metadata
+
+# This is the UMAP threshold for a few outlier cells
+tato.combined <- subset(tato.combined, subset = umap1 <10)
+
+```
+
+Display equal numbers of cells between WT and KO in UMAP plot
+```{r}
+WT_cells <-  which(tato.combined$state == 'WT')
+KO_cells <- which(tato.combined$state == 'KO')
+downsampled_KO_cells <- sample(KO_cells, 4709)
+WT_KO_integrated_downsampled <- tato.combined[,c(WT_cells, downsampled_KO_cells)]
+DimPlot(WT_KO_integrated_downsampled, reduction = "umap", split.by ="state", ncol=2)
+ggsave2("TATO UMAP total_downsampled.tiff", device = "tiff")
+```
+
+Save cluster proportion table
+```{r}
+TATO_props <- prop.table(table(Idents(tato.combined), tato.combined$sample), margin = 2)
+table(Idents(tato.combined), tato.combined$sample)
+TATO_props
+
+dittoBarPlot(tato.combined, "seurat_clusters", group.by = "state")
+ggsave("TATO cluster props_7-3-22.svg", device = "svg")
+```
+
+Perform stat test of cluster proportions
+```{r}
+TATO_prop_long <- data.frame(TATO_props)
+TATO_prop_long <- cbind(TATO_prop_long, substring(TATO_prop_long$Var2 , 1, 2))
+names(TATO_prop_long)[4] <- "State"
+names(TATO_prop_long)[1] <- "Cluster"
+
+stat.test <- TATO_prop_long %>%
+  group_by(Cluster) %>%
+  t_test(Freq ~ State) %>%
+  adjust_pvalue(method = "BH") %>%
+  add_significance()
+stat.test
+```
+
+Generate top 10 cluster markers
+```{r}
+DefaultAssay(tato.combined) <- "integrated"
+tato.markers <- FindAllMarkers(tato.combined, only.pos = TRUE, min.pct = 0.25, logfc.threshold = 0.25)
+top10forclusters <- tato.markers %>%
+    group_by(cluster) %>%
+    slice_max(n = 10, order_by = avg_log2FC)
+top10forclusters
+
+```
+
+Create heatmap of selected markers
+```{r}
+DoHeatmap(tato.combined, features = c("Sell","Ccr6", "Gpr183","Ighd", "Aicda", "S1pr2",    "Cd83","Zbtb32", "Vim", "Cr2", "Actn1", "Myc", "Bcl2a1d","Bcl2a1b",  "Ifi203", "Socs1", "Oasl","Mki67", "Top2a", "Xbp1", "Jchain", "Mzb1"), group.colors = dittoColors(), assay = "integrated", draw.lines =T, angle = 0, label = F) + NoLegend() + scale_fill_gradientn(colors = c("darkblue","white", "orangered"))
+ggsave2("TATO Cluster heatmap select.jpg", device = "jpg", width =10, height = 20)
+```
+
+Differential gene expression with FindMarkers
+```{r}
+# Duplicate main object 
+tato.combined.DE <- tato.combined
+tato.combined.DE$celltype.state <- paste(Idents(tato.combined.DE), tato.combined.DE$state, sep = "_")
+tato.combined.DE$celltype <- Idents(tato.combined.DE)
+Idents(tato.combined.DE) <- "celltype.state"
+
+TATO_DE_OUT_WT_KO_28_3 <- vector("list",9)
+for (i in 0:9) {
+  print(i)
+  TATO_DE_OUT_WT_KO_28_3[[i+1]] <- FindMarkers(tato.combined.DE, ident.1 = sprintf("%d_KO", i), ident.2 = sprintf("%d_WT", i), verbose = TRUE, test.use = "t", assay = "RNA")
+  names(TATO_DE_OUT_WT_KO_28_3)[[i+1]] <- i
+}
+write.xlsx(TATO_DE_OUT_WT_KO, "TATO Single cell DE 28-3-22.xlsx", rowNames = T)
+```
+
+Volcano plots
+```{r}
+Volc_0 <- TATO_DE_OUT_WT_KO$`0` 
+Volc_0 <- filter(Volc_0, p_val_adj < 0.05 & avg_log2FC > -50 & avg_log2FC < 20)
+  
+  keyvals.colour <- ifelse(
+    Volc_0$avg_log2FC < -1, 'darkblue',
+      ifelse(Volc_0$avg_log2FC > 1, 'orangered',
+        'black'))
+    names(keyvals.colour)[keyvals.colour == 'orangered'] <- 'high'
+  names(keyvals.colour)[keyvals.colour == 'black'] <- 'mid'
+  names(keyvals.colour)[keyvals.colour == 'darkblue'] <- 'low'
+
+  Cluster0volclab <- c("Jund", "Jun", "Fos", "Jun", "Junb", "mt-Co1", "mt-Co3", "mt-Cytb", "mt-Nd5", "mt-Atp8", "mt-Nd4l")
+
+  EnhancedVolcano(Volc_0,
+    lab = rownames(Volc_0),
+    x = 'avg_log2FC',
+    y = 'p_val_adj', pCutoff = 1, FCcutoff = 2, gridlines.major = F, gridlines.minor = F, colCustom = keyvals.colour, colAlpha = .5, pointSize = 5, legendLabSize = 12, drawConnectors = TRUE, arrowheads = F, lengthConnectors = unit(0.2, "npc"), selectLab = Cluster0volclab)
+  
+ggsave2("TATO C0 volcano selected.svg", device = "svg", width =7, height = 7)
+  
+Volc_1 <- TATO_DE_OUT_WT_KO$`1` 
+
+Volc_1 <- filter(Volc_1, p_val_adj < 0.05 & avg_log2FC > -50 & avg_log2FC < 50)
+  
+Cluster1volclab <- c("Junb", "Jun", "Fos", "Rgs1", "Coro1a", "mt-Co1", "Anxa2", "mt-Cytb", "mt-Nd5", "Arpc3", "mt-Nd4l", "Rpl32", "Rpl12", "Crip1", "Mef2b")
+
+  keyvals.colour <- ifelse(
+    Volc_1$avg_log2FC < -1, 'darkblue',
+      ifelse(Volc_1$avg_log2FC > 1, 'orangered',
+        'black'))
+    names(keyvals.colour)[keyvals.colour == 'orangered'] <- 'high'
+  names(keyvals.colour)[keyvals.colour == 'black'] <- 'mid'
+  names(keyvals.colour)[keyvals.colour == 'darkblue'] <- 'low'
+  
+  EnhancedVolcano(Volc_1,
+    lab = rownames(Volc_1),
+    x = 'avg_log2FC',
+    y = 'p_val_adj', pCutoff = 1, FCcutoff = 2, gridlines.major = F, gridlines.minor = F, colCustom = keyvals.colour, colAlpha = .5, pointSize = 5, legendLabSize = 12, drawConnectors = T, arrowheads = F, lengthConnectors = unit(0.03, "npc"), selectLab = Cluster1volclab)
+  
+ggsave("TATO C1 volcano.svg", device = "svg", width =7, height = 7)
+```
+
+Pathway analysis with SCPA
+```{r}
+# Separate into WT and KO groups
+tato.combined.path <- SplitObject(tato.combined, split.by = "state")
+
+# Load GO BP pathways
+pathways <- msigdbr(species = "Mus musculus", category = "C5", subcategory = "GO:BP") %>%
+      format_pathways()
+
+scpa_out_list_GOBP_10_3_22<- list()
+
+for (i in 0:9) {
+  WT <- seurat_extract(tato.combined.path$WT, 
+                            meta1 = "seurat_clusters", value_meta1 = i)
+  KO <- seurat_extract(tato.combined.path$KO, 
+                          meta1 = "seurat_clusters", value_meta1 = i)
+  
+  print(paste("comparing", i))
+  scpa_out_list_GOBP_10_3_22[[i+1]]<- compare_pathways(list(KO, WT), pathways = pathways)
+  names(scpa_out_list_GOBP_10_3_22)[i+1] <- i
+}
+```
+
+Generate lollypop plots
+```{r}
+scpa_C1_GOBP <-scpa_out_list_GOBP_10_3_22$`1` %>%
+        filter(adjPval <0.05) %>%
+        arrange(desc(qval))
+        
+  
+TATO_C1_SCPA_lolly<-ggdotchart(scpa_C1_GOBP[0:10,], x = "Pathway", y = "FC", 
+            color = "adjPval",
+            sorting = "descending",
+            add = "segments",
+            rotate = TRUE,
+            dot.size = 10,
+            gradient.cols = c("darkgreen", "grey"),
+            font.label = list(color = "white", size = 9, vjust = 0.5),              
+            ggtheme = theme_pubr(),
+            ylab = F
+            )
+TATO_C1_SCPA_lolly <- TATO_C1_SCPA_lolly + rremove("y.text")
+TATO_C1_SCPA_lolly
+ggsave("TATO C1 SCPA lolly.svg", device = "svg", width =5, height = 10)
+
+scpa_C0_GOBP <-scpa_out_list_GOBP_10_3_22$`0` %>%
+        filter(adjPval <0.05) %>%
+        arrange(desc(qval))
+
+TATO_C0_SCPA_lolly<-ggdotchart(scpa_C0_GOBP[0:10,], x = "Pathway", y = "FC", 
+            color = "adjPval",
+            sorting = "descending",
+            add = "segments",
+            rotate = TRUE,
+            dot.size = 10,
+            gradient.cols = c("darkgreen", "grey"),
+            font.label = list(color = "white", size = 9, vjust = 0.5),              
+            ggtheme = theme_pubr(),
+            ylab = F
+            )
+TATO_C0_SCPA_lolly <- TATO_C0_SCPA_lolly + rremove("y.text")
+TATO_C0_SCPA_lolly
+ggsave("TATO C0 SCPA lolly.svg", device = "svg", width =5, height = 10)
+```
+
+Repertoire (using scRepertoire)
+```{r}
+# Read files
+WT1_rep <- read.csv("~/TATO_final_sc/VDJ/WTCHG_917714_TY10/outs/filtered_contig_annotations.csv")
+WT2_rep <- read.csv("~/TATO_final_sc/VDJ/WTCHG_917714_TY13/outs/filtered_contig_annotations.csv")
+WT3_rep <- read.csv("~/TATO_final_sc/VDJ/WTCHG_917714_TY16/outs/filtered_contig_annotations.csv")
+
+KO1_rep <- read.csv("~/TATO_final_sc/VDJ/WTCHG_917714_TY12/outs/filtered_contig_annotations.csv")
+KO2_rep <- read.csv("~/TATO_final_sc/VDJ/WTCHG_917714_TY15/outs/filtered_contig_annotations.csv")
+KO3_rep <- read.csv("~/TATO_final_sc/VDJ/WTCHG_917714_TY18/outs/filtered_contig_annotations.csv")
+
+# Need to filter lists to only include good cells
+# Get list of good cells from main Seurat
+WT1_cells_good <- Cells(subset(x = tato.combined, subset = sample == "WT1" & seurat_clusters %in% c(1,7,5)))
+WT2_cells_good <- Cells(subset(x = tato.combined, subset = sample == "WT2" & seurat_clusters %in% c(1,7,5)))
+WT3_cells_good <- Cells(subset(x = tato.combined, subset = sample == "WT3" & seurat_clusters %in% c(1,7,5)))
+KO1_cells_good <- Cells(subset(x = tato.combined, subset = sample == "KO1" & seurat_clusters %in% c(1,7,5)))
+KO2_cells_good <- Cells(subset(x = tato.combined, subset = sample == "KO2" & seurat_clusters %in% c(1,7,5)))
+KO3_cells_good <- Cells(subset(x = tato.combined, subset = sample == "KO3" & seurat_clusters %in% c(1,7,5)))
+
+cells_good <- c(WT1_cells_good, WT2_cells_good, WT3_cells_good, KO1_cells_good, KO2_cells_good, KO3_cells_good)
+
+WT1_cells_good <- substring(WT1_cells_good, 5)
+WT2_cells_good <- substring(WT2_cells_good, 5)
+WT3_cells_good <- substring(WT3_cells_good, 5)
+KO1_cells_good <- substring(KO1_cells_good, 5)
+KO2_cells_good <- substring(KO2_cells_good, 5)
+KO3_cells_good <- substring(KO3_cells_good, 5)
+
+WT1_cells_good <- data.frame(WT1_cells_good)
+WT2_cells_good <- data.frame(WT2_cells_good)
+WT3_cells_good <- data.frame(WT3_cells_good)
+KO1_cells_good <- data.frame(KO1_cells_good)
+KO2_cells_good <- data.frame(KO2_cells_good)
+KO3_cells_good <- data.frame(KO3_cells_good)
+
+WT1_cells_good <-rename(WT1_cells_good, "barcode" ="WT1_cells_good")
+WT2_cells_good <-rename(WT2_cells_good, "barcode" ="WT2_cells_good")
+WT3_cells_good <-rename(WT3_cells_good, "barcode" ="WT3_cells_good")
+KO1_cells_good <-rename(KO1_cells_good, "barcode" ="KO1_cells_good")
+KO2_cells_good <-rename(KO2_cells_good, "barcode" ="KO2_cells_good")
+KO3_cells_good <-rename(KO3_cells_good, "barcode" ="KO3_cells_good")
+
+WT1_cells_good <- data.table(WT1_cells_good)
+WT2_cells_good <- data.table(WT2_cells_good)
+WT3_cells_good <- data.table(WT3_cells_good)
+KO1_cells_good <- data.table(KO1_cells_good)
+KO2_cells_good <- data.table(KO2_cells_good)
+KO3_cells_good <- data.table(KO3_cells_good)
+
+setkey(WT1_cells_good, barcode)
+setkey(WT2_cells_good, barcode)
+setkey(WT1_cells_good, barcode)
+setkey(WT2_cells_good, barcode)
+setkey(WT1_cells_good, barcode)
+setkey(WT2_cells_good, barcode)
+
+WT1_rep <- data.table(WT1_rep)
+setkey(WT1_rep, barcode)
+WT2_rep <- data.table(WT2_rep)
+setkey(WT2_rep, barcode)
+WT3_rep <- data.table(WT3_rep)
+setkey(WT3_rep, barcode)
+KO1_rep <- data.table(KO1_rep)
+setkey(KO1_rep, barcode)
+KO2_rep <- data.table(KO2_rep)
+setkey(KO2_rep, barcode)
+KO3_rep <- data.table(KO3_rep)
+setkey(KO3_rep, barcode)
+
+# Intersect data tables
+WT1_rep <- WT1_rep[WT1_cells_good]
+WT2_rep <- WT2_rep[WT2_cells_good]
+WT3_rep <- WT3_rep[WT3_cells_good]
+KO1_rep <- KO1_rep[KO1_cells_good]
+KO2_rep <- KO2_rep[KO2_cells_good]
+KO3_rep <- KO3_rep[KO3_cells_good]
+
+# Remove NAs
+WT1_rep <- na.omit(WT1_rep)
+WT2_rep <- na.omit(WT2_rep)
+WT3_rep <- na.omit(WT3_rep)
+KO1_rep <- na.omit(KO1_rep)
+KO2_rep <- na.omit(KO2_rep)
+KO3_rep <- na.omit(KO3_rep)
+
+TATO_contig_list <- list(WT1_rep, WT2_rep, WT3_rep, KO1_rep, KO2_rep, KO3_rep)
+
+TATO_contig_list <- combineBCR(TATO_contig_list, ID = c("WT1", "WT2", "WT3", "KO1", "KO2", "KO3"), samples = c("WT", "WT", "WT", "KO", "KO", "KO"), removeNA = T)
+```
+
+Generate clonal abundance plots
+```{r}
+abundanceContig(TATO_contig_list, cloneCall = "gene", exportTable = T)
+
+quantContig(TATO_contig_list, cloneCall="gene", scale = T)
+abundanceContig(TATO_contig_list, cloneCall = "aa", scale = F)
+
+compareClonotypes(TATO_contig_list, numbers = 20, 
+                    cloneCall="gene+nt", graph = "alluvial") + scale_colour_brewer(palette = "Greens")
+
+scatterClonotype(TATO_contig_list, cloneCall ="gene", 
+                 x.axis = "WT", 
+                 y.axis = "KO",
+                 dot.size = "total",
+                 graph = "proportion")
+
+clonalHomeostasis(TATO_contig_list, cloneCall = "aa", 
+                  cloneTypes = c(Rare = 1e-04, 
+                                 Small = 0.001, 
+                                 Medium = 0.01, 
+                                 Large = 0.1, 
+                                 Hyperexpanded = 1))
+clonalHomeostasis(TATO_contig_list, cloneCall = "nt")
+clonalProportion(TATO_contig_list, cloneCall = "aa",
+                 split = c(10, 100, 1000, 10000, 30000, 1e+05)) 
+clonalDiversity(TATO_contig_list, cloneCall = "aa", n.boots = 1000, exportTable  = T)
+
+clonesizeDistribution(TATO_contig_list, cloneCall = "aa", method="ward.D2")
+lengthContig(TATO_contig_list, cloneCall="aa")
+ggsave("Clonal quant gene+nt n20 WT_KO.svg", device = "svg", height = 7, width = 10)
+```
+
+
+
